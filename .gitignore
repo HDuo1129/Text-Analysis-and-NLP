@@ -1,0 +1,16 @@
+.DS_Store
+.RData
+.Rhistory
+.Rproj.user/
+
+# Secrets
+Data/apikey.txt
+manifesto_apikey.txt
+
+# Local caches and generated session files
+*.Rproj.user
+*.log
+*.tmp
+
+# Keep large generated outputs out unless explicitly needed
+cache/
