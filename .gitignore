@@ -14,3 +14,6 @@ manifesto_apikey.txt
 
 # Keep large generated outputs out unless explicitly needed
 cache/
+
+# Claude Code working directory
+.claude/
