@@ -1,32 +1,16 @@
 # ==============================================================================
 # DOPP 5688 — Text as Data (Spring 2026)
 # Assignment: Method Application
-#
 # Author:  Huang Duo
-# Method:  Wordfish (Day 4 — Unsupervised Spatial Scaling)
+# Email:   Huang_Duo@student.ceu.edu
+# Method:  Wordfish (Unsupervised Spatial Scaling)
 # Data:    Austrian party manifestos, 2013 / 2017 / 2019 (via manifestoR / MARPOR)
 # Goal:    Estimate the ideological positions of the five main Austrian
 #          parliamentary parties across three recent federal elections and
 #          interpret the dimension that Wordfish recovers.
 # ==============================================================================
-# REPRODUCIBILITY NOTE
-# ------------------------------------------------------------------------------
-# This script is self-contained. To run it you need:
-#   1. A free MARPOR / Manifesto Project API key. Register at
-#      https://manifesto-project.wzb.eu, then go to your profile and generate
-#      one.
-#   2. Save the key as a plain text file called "manifesto_apikey.txt" in the
-#      same folder as this script (or update the path in mp_setapikey() below).
-#   3. The R packages listed in section 1. Uncomment install.packages() once if
-#      they are not yet installed.
-# ==============================================================================
-
 
 # 1. Setup and Package Loading -------------------------------------------------
-
-# install.packages(c("manifestoR", "quanteda", "quanteda.textmodels",
-#                    "quanteda.textplots", "tidyverse"))
-
 library(manifestoR)             # API access to MARPOR corpus
 library(quanteda)               # corpus / tokens / DFM
 library(quanteda.textmodels)    # textmodel_wordfish
@@ -36,21 +20,16 @@ set.seed(1904)
 
 
 # 2. Data Ingestion ------------------------------------------------------------
-
-# Set the API key. The file should contain ONLY the key string on one line.
 mp_setapikey("/Users/huangduo/Desktop/NLP/manifesto_apikey.txt")
 
-# Pull the MARPOR main dataset (small metadata table, downloads in seconds).
-# We then filter to Austria + the three most recent federal elections we want.
-#
+# Pull the MARPOR main dataset
+
 # Why these three elections?
 #   - 2013: NEOS entered parliament for the first time; SPÖ-ÖVP grand coalition continued.
 #   - 2017: Sebastian Kurz led ÖVP to first place; formed right-wing coalition with FPÖ.
 #   - 2019: Post-Ibiza snap election; ÖVP formed an unprecedented coalition with the Greens.
 # This span covers a decade of significant realignment in Austrian politics and gives
 # enough variation to see whether party positions drift over time.
-# NOTE: MARPOR does not yet include the 2024 Austrian election (coded with a typical
-# lag of 1-2 years after the election date).
 
 mp_main <- mp_maindataset()
 
@@ -60,7 +39,7 @@ at_meta <- mp_main |>
          edate <= as.Date("2019-12-31")) |>
   # Filter by partyabbrev (more stable than partyname across dataset versions).
   # NEOS ran under the same abbreviation in both 2013 ("The New Austria") and
-  # 2017/2019 ("The New Austria and Liberal Forum"), so one filter catches all.
+  # 2017/2019 ("The New Austria and Liberal Forum").
   filter(partyabbrev %in% c("SPÖ", "ÖVP", "FPÖ", "GRÜNE", "NEOS")) |>
   select(party, partyname, partyabbrev, edate, date) |>
   arrange(edate, partyabbrev)
@@ -68,32 +47,14 @@ at_meta <- mp_main |>
 cat("Manifestos to download:\n")
 print(at_meta)
 
-# Download the actual texts (quasi-sentences with MARPOR codes). The result is
-# a tm-style Corpus. We immediately bypass the cache to make sure we get fresh
-# data on first run; subsequent runs are cached locally by manifestoR.
+# Download the actual texts
 at_corpus_marpor <- mp_corpus(countryname == "Austria" &
                                 edate >= as.Date("2013-01-01") &
                                 edate <= as.Date("2019-12-31") &
                                 party %in% at_meta$party)
 
-
 # 3. Build a quanteda corpus ---------------------------------------------------
 
-# manifestoR returns one document per manifesto. Each document contains a list
-# of quasi-sentences. We concatenate them to get one long text per manifesto,
-# which is what Wordfish needs (it scales documents, not sentences).
-#
-# METHODOLOGICAL JUSTIFICATION (document level):
-# Wordfish models word frequencies under the assumption that each document
-# draws from a single ideological position. Sentence-level scaling is too
-# sparse for reliable estimation — see the Day 4 lab notes. Manifestos are
-# already at the right granularity: each is a coherent statement of a party's
-# policy platform for one election.
-
-# Same pattern as HW2: iterate over names(), access each document with [[doc_id]],
-# then call content() on that single ManifestoDocument object.
-# map_chr() returns one string per manifesto (the full text collapsed into one value),
-# while map_dfr() in HW2 returned one row per quasi-sentence.
 doc_ids   <- names(at_corpus_marpor)
 doc_texts <- map_chr(doc_ids, function(doc_id) {
   paste(content(at_corpus_marpor[[doc_id]]), collapse = " ")
@@ -117,14 +78,13 @@ print(summary(at_corpus))
 # 4. Preprocessing -------------------------------------------------------------
 
 # METHODOLOGICAL JUSTIFICATION (no stemming):
-# Following the Day 4 lab, we deliberately skip stemming. Stemming collapses
+# Following the last step, we deliberately skip stemming. Stemming collapses
 # ideologically loaded variants (e.g., "Migrant" vs. "Migration", "Asylant"
 # vs. "Asyl") that often carry distinct partisan signals. For a scaling model
 # whose entire job is to detect such signals, stemming destroys exactly the
 # variation we want to measure.
 
-# German stopwords from quanteda's built-in list (same principle as stopwords("english")
-# used in the Day 4 lab), plus custom procedural / corpus-specific words.
+# German stopwords from quanteda's built-in list, plus custom procedural words.
 # We strip generic political vocabulary that appears in every manifesto regardless
 # of position ("Österreich", "Bundesregierung", etc.) so Wordfish picks up
 # substantive partisan vocabulary rather than common nouns.
@@ -146,7 +106,7 @@ toks <- tokens(at_corpus,
                remove_numbers = TRUE,
                remove_symbols = TRUE) |>
   tokens_tolower() |>
-  tokens_remove(stopwords("german")) |>        # same pattern as stopwords("english") in Day 4
+  tokens_remove(stopwords("german")) |> 
   tokens_remove(custom_stopwords) |>
   tokens_remove(pattern = "^.{1,2}$", valuetype = "regex")  # drop 1-2 character fragments
 
@@ -163,23 +123,6 @@ cat("\nDFM dimensions:", ndoc(dfm_docs), "documents x",
 
 
 # 5. Wordfish — Main Model -----------------------------------------------------
-
-# METHODOLOGICAL JUSTIFICATION (Wordfish over Wordscores):
-# Wordfish is UNSUPERVISED: it discovers the dominant dimension of disagreement
-# directly from word-frequency patterns, with no need to pre-label "left" and
-# "right" anchor texts. This is the right choice for our research question
-# because we want to interpret what dimension the texts themselves emphasize,
-# not impose our prior assumption that "the conflict is left vs. right".
-# As the Day 4 lab demonstrates, the Wordfish "Illusion" is exactly the
-# interpretive challenge we want to engage with.
-#
-# ANCHOR DIRECTION:
-# Wordfish needs `dir = c(low, high)` to fix the orientation of the recovered
-# axis. The model is rotation-invariant: without an anchor it would arbitrarily
-# flip the spectrum. We anchor FPÖ 2019 to the high end and Grüne 2019 to the
-# low end — these are the two parties whose ideological distance is least
-# disputed in the Austrian context. Note: this only fixes the sign, not the
-# substance of the dimension.
 
 # Find row indices for the anchors.
 # Print all labels first so you can verify what MARPOR actually returned.
@@ -204,7 +147,6 @@ print(summary(wf))
 # 6. Visualisation -------------------------------------------------------------
 
 # 6a. Document positions (theta) ----------------------------------------------
-# This is the main result: each manifesto's position on the recovered axis.
 # Grouped by party so we can see (i) cross-party separation and (ii) within-
 # party drift across elections.
 
@@ -258,26 +200,6 @@ plot_drift <- ggplot(theta_df,
 
 print(plot_drift)
 
-# 6c. Eiffel-tower plot of word weights ---------------------------------------
-# WHICH words define the recovered axis? Highlight a few substantively
-# interesting terms (German lemmas) drawn from the policy areas where Austrian
-# parties most disagree: migration, climate, economy, EU.
-
-highlight_words <- c("asyl", "migration", "klima", "umwelt", "steuern",
-                     "soziale", "sicherheit", "freiheit", "europäische",
-                     "grenzen", "familie", "tradition")
-
-plot_words <- textplot_scale1d(
-  wf, margin = "features",
-  highlighted = highlight_words
-) +
-  ggtitle("Wordfish Word Weights — What Defines the Axis?",
-          subtitle = "Y = log frequency (ψ);  X = ideological weight (β)") +
-  theme_minimal()
-
-print(plot_words)
-
-
 # 7. Interpretation Aid: Top discriminating words ------------------------------
 # Print the 20 most "high-end" (FPÖ-leaning) and "low-end" (Grüne-leaning)
 # words by beta. This is what we use to NAME the axis after the model has
@@ -288,8 +210,6 @@ word_betas <- tibble(
   beta = wf$beta,
   psi  = wf$psi
 ) |>
-  # Drop very rare words from the top-N lists; they dominate by exclusivity
-  # rather than by genuine partisan signal.
   filter(psi > median(psi))
 
 cat("\n--- Top 20 words on the HIGH end (anchored toward FPÖ 2019) ---\n")
@@ -302,74 +222,81 @@ print(word_betas |> arrange(beta) |> slice_head(n = 20))
 # ==============================================================================
 # 8. Findings and Interpretation
 # ==============================================================================
+
+# --- METHOD JUSTIFICATION -----------------------------------------------------
+# Wordfish is the appropriate method for this research question for three
+# reasons. First, the goal is to discover the dominant dimension of
+# disagreement across manifestos without imposing a prior assumption about
+# what that dimension is (e.g. left vs. right). Wordfish is unsupervised:
+# it recovers the axis from word-frequency patterns alone. Second, the unit
+# of analysis is whole manifestos — one document per party per election —
+# which is exactly the granularity Wordfish requires. Sentence-level data
+# would be too sparse for reliable estimation. Third, the corpus spans three
+# elections, making it possible to track positional drift over time, which is
+# a core advantage of fitting Wordfish to a multi-election corpus.
+
+# --- WHAT DIMENSION DOES WORDFISH RECOVER? ------------------------------------
+# The top discriminating words from Section 7 identify the axis clearly.
 #
-# WHAT DIMENSION DOES WORDFISH RECOVER?
-# --------------------------------------
-# The top discriminating words (Section 7) reveal a more complex dimension
-# than a simple cultural axis.
+# The NEGATIVE end is anchored by GRÜNE's vocabulary: "menschenrechte"
+# (human rights), "gleichstellung" (gender equality), "zivilgesellschaft"
+# (civil society), "ökologische" (ecological), "fossilen" (fossil fuels),
+# "klimaschutz" (climate protection), "tierschutz" (animal welfare),
+# "datenschutz" (data privacy). These are textbook Green-Alternative-
+# Libertarian (GAL) values focused on rights, ecology, and civil freedoms.
 #
-# The NEGATIVE end (GRÜNE-leaning) is clearly defined by progressive and
-# rights-based vocabulary: "menschenrechte" (human rights), "gleichstellung"
-# (gender equality), "zivilgesellschaft" (civil society), "ökologische"
-# (ecological), "fossilen" (fossil fuels), "klimaschutz" (climate protection),
-# "tierschutz" (animal welfare), "datenschutz" (data privacy). These are
-# textbook Green-Alternative-Libertarian (GAL) values.
+# The POSITIVE end is defined by a mix of two things. The first is
+# economic-conservative policy vocabulary concentrated in ÖVP's 2017 manifesto:
+# "schulden" (debt), "bürokratie" (bureaucracy), "lohnnebenkosten"
+# (non-wage labour costs), "progression" (tax bracket reform). The second is
+# rhetorical style: words like "natürlich", "deswegen", "nämlich", and
+# "eigentlich" are conversational discourse markers characteristic of Kurz's
+# deliberately informal campaign communication. Wordfish is sensitive to HOW
+# parties write, not only WHAT they write about.
 #
-# The POSITIVE end (ÖVP/FPÖ-leaning) is more mixed. It contains:
-#   (a) Economic-conservative policy words: "schulden" (debt reduction),
-#       "bürokratie" (cutting bureaucracy), "lohnnebenkosten" (reducing
-#       non-wage labour costs), "gebühren" (fees), "progression" (tax
-#       bracket reform) — all key ÖVP 2017 campaign promises.
-#   (b) Public service reform words: "lehrer" (teachers), "schulsystem"
-#       (school system), "patienten" (patients).
-#   (c) Rhetorical style markers: "natürlich", "deswegen", "nämlich",
-#       "eigentlich" — conversational connectors characteristic of Kurz's
-#       direct, informal campaign communication style.
+# The recovered axis is therefore not classical economic left–right. It
+# reflects a GAL–TAN cultural dimension overlaid with the distinctive
+# rhetorical register of ÖVP's 2017 campaign. This is an instance of the
+# Wordfish "Illusion" discussed in the Day 4 lab: the model finds the single
+# biggest source of textual variance, which here is a combination of ideology
+# and rhetorical style, not the dimension the analyst might have expected.
+
+# --- MAIN FINDINGS ------------------------------------------------------------
+# (1) ÖVP's shift in 2017 (θ: +0.16 → +1.65) is the most striking result.
+#     Under Kurz, ÖVP's manifesto scored higher on this axis than FPÖ itself —
+#     meaning its text was more linguistically extreme than the party it was
+#     competing with for right-wing voters. This reflects the documented
+#     strategy of absorbing FPÖ's cultural and security agenda while adding a
+#     layer of economic-reform and school-system vocabulary that FPÖ lacked.
 #
-# This means Wordfish captures not only ideological content but also rhetorical
-# style. ÖVP_2017 scored the highest not only because of its policy agenda but
-# also because of a distinctively casual, direct speaking style that set it
-# apart from the more formal language of other parties.
-# This is exactly the "Wordfish Illusion" from the Day 4 lab: the axis reflects
-# the single biggest source of textual variance, which here is a combination of
-# ideology, policy priorities, and rhetorical register.
+# (2) FPÖ shifted toward the centre in relative terms (θ: +1.01 → +0.27 →
+#     +0.43). This does not mean FPÖ moderated its politics. It means ÖVP
+#     occupied the high end of the linguistic space, pushing FPÖ's relative
+#     position downward. This is a fundamental property of unsupervised
+#     scaling: positions are relative, not absolute.
 #
-# MAIN FINDINGS FROM THE DRIFT PLOT
-# -----------------------------------
-# (1) ÖVP's dramatic shift in 2017 (θ: +0.16 → +1.65) is the most striking
-#     result. Under Sebastian Kurz, ÖVP deliberately adopted the nationalist
-#     and security-focused language of FPÖ — so much so that its manifesto
-#     text scored MORE extreme than FPÖ's own manifesto on this axis. This
-#     reflects the well-documented "Kurz strategy" of stealing FPÖ's agenda
-#     on migration and national identity to win the election.
+# (3) GRÜNE drifted further from all other parties across all three elections
+#     (θ: −1.47 → −1.56 → −1.91). Its vocabulary became increasingly
+#     distinctive, reflecting a sharpening of its environmental and rights-
+#     based platform over time, particularly as migration politics dominated
+#     the 2017 and 2019 campaigns and GRÜNE chose not to follow that frame.
 #
-# (2) FPÖ became relatively more centrist (θ: +1.01 → +0.27 → +0.43). This
-#     does not mean FPÖ moderated its actual policy positions. Rather, once
-#     ÖVP occupied the extreme right of the linguistic space, FPÖ's relative
-#     position shifted toward the centre. This is a known limitation of
-#     unsupervised scaling: it measures relative position, not absolute
-#     radicalism.
-#
-# (3) GRÜNE drifted further left across all three elections (-1.47 → -1.91),
-#     indicating that its manifesto language became increasingly distinctive
-#     and separated from all other parties. This reflects a progressive
-#     sharpening of their environmental and identity-based platform.
-#
-# (4) SPÖ shows an unusual rightward jump in 2017 (+0.59), suggesting that
-#     even the centre-left party adopted more security and nation-related
-#     vocabulary under pressure from the migration debate that dominated
-#     that election campaign, before returning near the centre in 2019.
-#
-# LIMITATIONS
-# -----------
-# (1) Only 15 documents total. The standard errors for smaller manifestos
-#     (e.g. FPÖ_2013, SE = 0.13) are considerably larger, so we should be
-#     cautious about over-interpreting year-to-year changes for those parties.
-# (2) Without lemmatisation, German word forms like "Migrant", "Migranten",
-#     and "Migration" are counted as separate features, which under-counts
-#     the true frequency of that topic across the corpus.
-# (3) Wordfish extracts exactly one dimension. Austrian politics likely has
-#     a second economic dimension (redistribution, welfare state) that this
-#     model cannot capture. A two-dimensional method would be needed to
-#     disentangle cultural from economic conflicts.
+# (4) SPÖ shows an unusual rightward jump in 2017 (θ: −0.22 → +0.59), then
+#     returns near the centre in 2019 (θ: +0.05). This suggests that even the
+#     centre-left party incorporated more security-oriented vocabulary during
+#     the 2017 migration debate, before reverting to a more typical social-
+#     democratic register in 2019.
+
+# --- LIMITATIONS --------------------------------------------------------------
+# (1) Small corpus: 15 documents total. Standard errors are considerably
+#     larger for shorter manifestos (e.g. FPÖ_2013, SE = 0.13 vs. ÖVP_2017,
+#     SE = 0.02), so year-to-year shifts for smaller parties should be
+#     interpreted with caution.
+# (2) No lemmatisation: German inflectional forms such as "Migrant",
+#     "Migranten", and "Migration" are treated as separate features. This
+#     underestimates the true frequency of that topic across the corpus.
+# (3) Single dimension: Wordfish recovers exactly one axis. Austrian politics
+#     plausibly has a second economic dimension (redistribution, welfare state)
+#     that this model cannot separate from the cultural one.
+# ==============================================================================
 # ==============================================================================
